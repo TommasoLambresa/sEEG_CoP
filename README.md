@@ -1,4 +1,3 @@
-
 # sEEG_CoP
 
 Center-out task driven by the center of pressure (CoP) measured by a force plate. During development the cursor is moved with the mouse.
@@ -6,7 +5,6 @@ Center-out task driven by the center of pressure (CoP) measured by a force plate
 ## Setup
 
 ```
-conda activate khymeia
 pip install -r requirements.txt
 pip install -e .
 ```
