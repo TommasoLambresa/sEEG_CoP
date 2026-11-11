@@ -1,0 +1,5 @@
+numpy>=2.0
+pygame>=2.6
+pylsl>=1.16
+pytest>=8.0
+websocket-client>=1.8
