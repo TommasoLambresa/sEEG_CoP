@@ -4,8 +4,7 @@ import argparse
 
 import pygame
 
-from cop import config, cursor, geometry, screen
-
+from cop import config, cursor, geometry, saving, screen
 
 def main():
     parser = argparse.ArgumentParser(description="Center-out task driven by the center of pressure.")
@@ -17,6 +16,12 @@ def main():
     monitor_hz = screen.monitor_refresh_hz()
     text_font = screen.load_font(config.TEXT_FONT_SIZE_PX)
     overlay_font = screen.load_font(config.OVERLAY_FONT_SIZE_PX)
+    session_info = screen.ask_session_info(window, text_font)
+    if session_info is None:
+        pygame.quit()
+        return
+    patient_id, language = session_info
+    session_folder = saving.make_session_folder(patient_id)
     target_positions = [
         geometry.target_position(direction_deg, config.DEFAULT_TARGET_DISTANCE_CM)
         for direction_deg in config.TARGET_DIRECTIONS_DEG
@@ -45,13 +50,13 @@ def main():
                 window, config.TARGET_COLOR, target_x_cm, target_y_cm, config.TARGET_RADIUS_CM, in_target, display_gain
             )
         screen.draw_cursor(window, cursor_x_cm, cursor_y_cm, display_gain)
-        screen.draw_text(window, text_font, screen.TEXTS["en"]["quit_hint"], (screen_width // 2, screen_height - 140))
-        screen.draw_text(window, text_font, screen.TEXTS["zh"]["quit_hint"], (screen_width // 2, screen_height - 80))
+        screen.draw_text(window, text_font, screen.TEXTS[language]["quit_hint"], (screen_width // 2, screen_height - 80))
 
         if config.SHOW_OPERATOR_OVERLAY and len(recent_flip_times) > 1:
             refresh_hz = (len(recent_flip_times) - 1) / (recent_flip_times[-1] - recent_flip_times[0])
             refresh_ok = abs(refresh_hz - monitor_hz) <= config.REFRESH_TOLERANCE_FRACTION * monitor_hz
             screen.draw_overlay(window, overlay_font, [
+                f"session {session_folder.name}, language {language}",
                 f"screen {screen_width} x {screen_height} px",
                 f"refresh {refresh_hz:.1f} Hz (monitor {monitor_hz} Hz)",
                 f"display gain {display_gain:.1f} px/cm (max {config.DISPLAY_GAIN_PX_PER_CM:.0f})",

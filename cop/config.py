@@ -1,15 +1,18 @@
 """All task settings: change values here, not in the code."""
 
 from pathlib import Path
+import string
 
-# Folders
+# Saving
 SAVE_DIR = Path(__file__).resolve().parents[1] / "data"
+PATIENT_ID_CHARACTERS = string.ascii_letters + string.digits + "_-"  # also valid in folder names
+PATIENT_ID_MAX_LENGTH = 20
 
 # Cursor source: "mouse" or "force_plate"
 CURSOR_SOURCE = "mouse"
 
 # Screen
-SCREEN_INDEX = 0  # 0 = main monitor, 1 = second monitor
+SCREEN_INDEX = 1  # 0 = main monitor, 1 = second monitor
 DISPLAY_GAIN_PX_PER_CM = 100.0  # maximum screen pixels for 1 cm of CoP; reduced automatically if targets do not fit
 SCREEN_MARGIN_PX = 20  # free space between the farthest target and the screen edge
 REFRESH_TOLERANCE_FRACTION = 0.05  # overlay turns red if measured and monitor refresh rates differ more than this

@@ -10,8 +10,22 @@ from pylsl import local_clock
 from cop import config, geometry
 
 TEXTS = {
-    "en": {"quit_hint": "Press Esc to quit"},
-    "zh": {"quit_hint": "按 Esc 键退出"},
+    "en": {
+        "language_name": "English",
+        "patient_id": "Patient ID (study code, not the name)",
+        "language": "Language",
+        "start_hint": "Left / Right: language    Enter: start    Esc: quit",
+        "missing_id": "Type the patient ID",
+        "quit_hint": "Press Esc to quit",
+    },
+    "zh": {
+        "language_name": "中文",
+        "patient_id": "患者编号（研究编号，不要用姓名）",
+        "language": "语言",
+        "start_hint": "左 / 右键：语言    回车：开始    Esc：退出",
+        "missing_id": "请输入患者编号",
+        "quit_hint": "按 Esc 键退出",
+    },
 }
 
 
@@ -26,7 +40,8 @@ def open_window() -> pygame.Surface:
         raise ValueError(
             f"SCREEN_INDEX = {config.SCREEN_INDEX}, but only {len(desktop_sizes)} monitor(s) found. Set it in cop/config.py."
         )
-    screen_size = desktop_sizes[config.SCREEN_INDEX]    # In pygame 2 vsync works only together with the SCALED flag
+    screen_size = desktop_sizes[config.SCREEN_INDEX]    
+    # In pygame 2 vsync works only together with the SCALED flag
     return pygame.display.set_mode(
         screen_size, pygame.FULLSCREEN | pygame.SCALED, vsync=1, display=config.SCREEN_INDEX
     )
@@ -78,6 +93,52 @@ def draw_overlay(window: pygame.Surface, font: pygame.font.Font, lines: list[str
         line_image = font.render(line, True, color)
         window.blit(line_image, (10, 10 + line_index * font.get_linesize()))
 
+
+def ask_session_info(window: pygame.Surface, font: pygame.font.Font) -> tuple[str, str] | None:
+    # Start screen for the operator, in all languages; returns None if Esc is pressed
+    languages = list(TEXTS)
+    language_index = 0
+    patient_id = ""
+    show_missing_id = False
+    while True:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
+                return None
+            if event.type == pygame.TEXTINPUT:
+                # TEXTINPUT gives the typed text with the keyboard layout and Shift already applied
+                allowed_text = "".join(character for character in event.text if character in config.PATIENT_ID_CHARACTERS)
+                patient_id = (patient_id + allowed_text)[:config.PATIENT_ID_MAX_LENGTH]
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_BACKSPACE:
+                    patient_id = patient_id[:-1]
+                elif event.key == pygame.K_LEFT:
+                    language_index = (language_index - 1) % len(languages)
+                elif event.key == pygame.K_RIGHT:
+                    language_index = (language_index + 1) % len(languages)
+                elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                    if patient_id:
+                        return patient_id, languages[language_index]
+                    show_missing_id = True
+
+        language_options = "    ".join(
+            f"[ {TEXTS[language]['language_name']} ]" if index == language_index else TEXTS[language]["language_name"]
+            for index, language in enumerate(languages)
+        )
+        lines = [TEXTS[language]["patient_id"] for language in languages]
+        lines += ["", patient_id + "_", ""]
+        lines += [" / ".join(TEXTS[language]["language"] for language in languages), language_options, ""]
+        lines += [TEXTS[language]["start_hint"] for language in languages]
+        if show_missing_id:
+            lines += ["", " / ".join(TEXTS[language]["missing_id"] for language in languages)]
+
+        window.fill(config.BACKGROUND_COLOR)
+        screen_width, screen_height = window.get_size()
+        line_height_px = font.get_linesize()
+        top_px = screen_height / 2 - len(lines) * line_height_px / 2
+        for line_index, line in enumerate(lines):
+            if line:
+                draw_text(window, font, line, (screen_width // 2, round(top_px + (line_index + 0.5) * line_height_px)))
+        flip()
 
 def flip() -> float:
     # With vsync, flip waits for the screen refresh: the time right after it is when the frame is sent to the screen
