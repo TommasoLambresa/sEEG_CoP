@@ -41,7 +41,7 @@ RETURN_HOLD_S = 0.5  # time inside the center circle that counts as "back to cen
 TARGET_FRACTION = 0.6  # target distance = fraction of the limit
 TARGET_GAP_CM = 0.3  # smallest free space between circles: the minimum target distance follows from it
 ARROW_HEAD_PX = 60
-ARROW_WIDTH_PX = 12
+ARROW_WIDTH_PX = 8
 ARROW_COLOR = (80, 160, 255)
 
 # Texts
