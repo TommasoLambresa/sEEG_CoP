@@ -9,12 +9,11 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-`pip install -e .` makes the `cop` folder importable from the programs in `scripts/` and from `tests/`.
+`pip install -e .` makes the `cop` folder importable from the programs in `scripts/`.
 
 ## Folders
 
 - `cop/`: reusable modules (all settings in `cop/config.py`)
 - `scripts/`: programs launched from the terminal
-- `tests/`: run with `python -m pytest`
 - `devices/`: force plate software and streaming scripts
 - `data/`: saved sessions, not tracked by git
