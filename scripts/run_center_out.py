@@ -118,7 +118,6 @@ def main():
     calibration_gain = geometry.fit_display_gain(calibration_view_cm, (screen_width, screen_height))
     cursor_source = cursor.make_cursor(arguments.source, (screen_width, screen_height), calibration_gain)
 
-    # Until the first calibration: center at (0, 0) and the same default distance in every direction
     # Until the first calibration: center at (0, 0), the same default distance in every direction, calibration scale
     origin_cm = (0.0, 0.0)
     target_distances_cm = [config.DEFAULT_TARGET_DISTANCE_CM] * len(config.TARGET_DIRECTIONS_DEG)
