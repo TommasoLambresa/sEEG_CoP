@@ -76,14 +76,12 @@ def run_calibration(window: pygame.Surface, text_font: pygame.font.Font, overlay
     return calibration.make_calibration(center, hold_samples_by_direction)
 
 
-def task_layout(target_distances_cm: list, screen_size: tuple[int, int]) -> tuple[list, float]:
-    # Target positions and display gain; computed again only after a calibration, never during the trials
-    target_positions = [
+def target_positions_cm(target_distances_cm: list) -> list:
+    # (x, y) of each target in cm from the center, in the order of TARGET_DIRECTIONS_DEG
+    return [
         geometry.target_position(direction_deg, distance_cm)
         for direction_deg, distance_cm in zip(config.TARGET_DIRECTIONS_DEG, target_distances_cm)
     ]
-    display_gain = geometry.fit_display_gain(target_positions, screen_size)
-    return target_positions, display_gain
 
 
 def main():
@@ -113,16 +111,19 @@ def main():
     if settings["save_data"]:
         session_folder = saving.make_session_folder(settings["save_folder"], settings["patient_id"], settings["session"])
         calibration.save_calibrations(session_folder, session, calibrations)
-    # Calibration screens use a fixed scale wide enough for the largest lean; the mouse covers the same range
+    # Calibration screens, and the task before the first calibration, use a fixed scale wide enough for the
+    # largest lean; the mouse covers the same range
     calibration_view_cm = [(-config.CALIBRATION_VIEW_CM, 0.0), (config.CALIBRATION_VIEW_CM, 0.0),
                            (0.0, config.CALIBRATION_VIEW_CM)]
     calibration_gain = geometry.fit_display_gain(calibration_view_cm, (screen_width, screen_height))
     cursor_source = cursor.make_cursor(arguments.source, (screen_width, screen_height), calibration_gain)
 
     # Until the first calibration: center at (0, 0) and the same default distance in every direction
+    # Until the first calibration: center at (0, 0), the same default distance in every direction, calibration scale
     origin_cm = (0.0, 0.0)
     target_distances_cm = [config.DEFAULT_TARGET_DISTANCE_CM] * len(config.TARGET_DIRECTIONS_DEG)
-    target_positions, display_gain = task_layout(target_distances_cm, (screen_width, screen_height))
+    target_positions = target_positions_cm(target_distances_cm)
+    display_gain = calibration_gain
     recent_flip_times = []
     running = True
     while running:
@@ -142,7 +143,9 @@ def main():
                 new_calibration["directions"][direction_deg]["target_distance_cm"]
                 for direction_deg in config.TARGET_DIRECTIONS_DEG
             ]
-            target_positions, display_gain = task_layout(target_distances_cm, (screen_width, screen_height))
+            target_positions = target_positions_cm(target_distances_cm)
+            # Scale that fits the new targets to the screen: changes only here, never during the trials
+            display_gain = geometry.fit_display_gain(target_positions, (screen_width, screen_height))
             new_calibration["display_gain_px_per_cm"] = display_gain
             calibrations.append(new_calibration)
             if session_folder is not None:
@@ -190,7 +193,7 @@ def main():
                 f"saving to {session_folder}" if session_folder is not None else "data not saved",
                 f"language {language}, screen {screen_width} x {screen_height} px",
                 f"refresh {refresh_hz:.1f} Hz (monitor {monitor_hz} Hz)",
-                f"display gain {display_gain:.1f} px/cm (max {config.DISPLAY_GAIN_PX_PER_CM:.0f})",
+                f"display gain {display_gain:.1f} px/cm",
                 calibration_line,
                 f"target distances {distances_text} cm",
                 f"cursor x {cursor_x_cm:+.2f} cm, y {cursor_y_cm:+.2f} cm",

@@ -11,9 +11,9 @@ def center_px(screen_size: tuple[int, int]) -> tuple[float, float]:
 
 
 def fit_display_gain(points_cm: list, screen_size: tuple[int, int]) -> float:
-    # Largest gain (up to the maximum) that keeps every point, plus a target radius, inside the screen
+    # Largest gain that keeps every point, plus a target radius, inside the screen
     center_x_px, center_y_px = center_px(screen_size)
-    gain = config.DISPLAY_GAIN_PX_PER_CM
+    gain = math.inf
     for x_cm, y_cm in points_cm:
         # Points are on the sides or above the center: check the space left or right, and the space above
         gain = min(gain, (center_x_px - config.SCREEN_MARGIN_PX) / (abs(x_cm) + config.TARGET_RADIUS_CM))

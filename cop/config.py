@@ -14,7 +14,6 @@ CURSOR_SOURCE = "mouse"
 
 # Screen
 SCREEN_INDEX = 1  # 0 = main monitor, 1 = second monitor
-DISPLAY_GAIN_PX_PER_CM = 100.0  # maximum screen pixels for 1 cm of CoP; reduced automatically if targets do not fit
 SCREEN_MARGIN_PX = 20  # free space between the farthest target and the screen edge
 CENTER_SCREEN_Y_FRACTION = 0.8  # CoP (0, 0) drawn at this fraction of the screen height from the top (0.5 = middle)
 REFRESH_TOLERANCE_FRACTION = 0.05  # red warning if measured and monitor refresh rates differ more than this
@@ -32,7 +31,7 @@ TARGET_COLOR = (200, 200, 200)
 CURSOR_COLOR = (255, 210, 0)
 
 # Calibration (key C)
-CALIBRATION_VIEW_CM = 15.0  # largest lean shown on screen during calibration (also the mouse range)
+CALIBRATION_VIEW_CM = 15.0  # largest lean shown on screen during calibration and before the first one (also the mouse range)
 CALIBRATION_READY_S = 2.0  # "get ready" screen before the center measurement
 CENTER_CALIBRATION_S = 5.0  # standing still: mean and SD give the center
 LIMIT_REPETITIONS = 2  # per direction; the larger one is kept
