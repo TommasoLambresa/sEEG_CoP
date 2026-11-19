@@ -1,4 +1,7 @@
-"""One trial of the center-out task: phases, timers and outcome. No drawing and no clock: position and time come in."""
+"""Trials of the center-out task: one trial (phases, timers, outcome) and the trial list of the session.
+No drawing and no clock: position and time come in."""
+
+import numpy as np
 
 from cop import config, geometry
 
@@ -110,3 +113,30 @@ class Trial:
         self.reason = reason
         self.set_phase("feedback", time_s)
         return ["abort", "feedback"] if outcome == "aborted" else ["feedback"]
+
+
+def make_trial_list(seed: int) -> list[list[dict]]:
+    # Each direction at each speed TRIALS_PER_CONDITION times, plus NOGO_TRIALS no-go trials with the directions in
+    # turn (the first half fast, rounded up, then slow). The seed fixes order and waits: same seed, same list
+    rng = np.random.default_rng(seed)
+    directions_deg = config.TARGET_DIRECTIONS_DEG
+    trials = [
+        {"direction_deg": direction_deg, "speed": speed, "nogo": False}
+        for direction_deg in directions_deg for speed in ("fast", "slow") for _ in range(config.TRIALS_PER_CONDITION)
+    ]
+    fast_nogo_count = (config.NOGO_TRIALS + 1) // 2
+    trials += [
+        {"direction_deg": directions_deg[index % len(directions_deg)],
+         "speed": "fast" if index < fast_nogo_count else "slow", "nogo": True}
+        for index in range(config.NOGO_TRIALS)
+    ]
+    # Dealt to the blocks in turn, like cards: every condition, no-go included, is spread evenly over the blocks
+    # (165 trials in 6 blocks: 28, 28, 28, 27, 27, 27); then each block is shuffled
+    blocks = [trials[first::config.BLOCK_COUNT] for first in range(config.BLOCK_COUNT)]
+    blocks = [[block[index] for index in rng.permutation(len(block))] for block in blocks]
+    number = 0
+    for block_number, block in enumerate(blocks, start=1):
+        for planned in block:
+            number += 1
+            planned.update(trial=number, block=block_number, wait_s=float(rng.uniform(*config.TARGET_WAIT_RANGE_S)))
+    return blocks

@@ -13,7 +13,7 @@ START_WINDOW_FONT_SIZE = 12  # points
 CURSOR_SOURCE = "mouse"
 
 # Screen
-SCREEN_INDEX = 1  # 0 = main monitor, 1 = second monitor
+SCREEN_INDEX = 0  # 0 = main monitor, 1 = second monitor
 REFERENCE_SCREEN_HEIGHT_PX = 1080  # sizes in px in this file are for a screen this high; scaled to the real one
 SCREEN_MARGIN_PX = 20  # free space between the farthest target and the screen edge or the operator keys
 CENTER_SCREEN_Y_FRACTION = 0.8  # CoP (0, 0) drawn at this fraction of the screen height from the top (0.5 = middle)
@@ -44,6 +44,12 @@ ARROW_HEAD_PX = 60
 ARROW_WIDTH_PX = 8
 ARROW_COLOR = (80, 160, 255)
 
+# Trial list: shuffled with a seed saved with the session; Space starts each block
+TRIAL_LIST_SEED = 42  # None: a new seed every session; a number: the same list every session
+TRIALS_PER_CONDITION = 1  # per direction and speed
+NOGO_TRIALS = 3  # directions in turn; the first half fast (rounded up), then slow
+BLOCK_COUNT = 2
+
 # Trial (times in s; movement time = leaving the center -> entering the target)
 CENTER_HOLD_S = 1.0  # inside the center before the target appears; leaving restarts the count
 CENTER_HOLD_TIMEOUT_S = 10.0  # hold not reached in this time: trial aborted ("unstable_hold")
@@ -71,6 +77,7 @@ GHOST_DURATIONS_S = {"fast": 1.5, "slow": 5.0}
 GHOST_ALPHA = 110  # 0 = invisible, 255 = as opaque as the cursor
 DEMONSTRATION_DIRECTIONS_DEG = (90, 45, 135)  # one ghost movement per direction, for each speed
 DEMONSTRATION_WAIT_S = 1.5  # target on -> go in the demonstration
+REFRESHER_DIRECTIONS_DEG = (90,)  # reminder before each block: one ghost movement per direction, for each speed
 PRACTICE_WINDOW = 5  # a practice stage ends when PRACTICE_CORRECT_NEEDED of the last PRACTICE_WINDOW movements
 PRACTICE_CORRECT_NEEDED = 4  # have the right duration, or when the operator presses Space
 
@@ -83,7 +90,7 @@ TEXT_Y_FRACTION = 0.91  # patient texts: fraction of the screen height from the 
 # Operator overlay: keys centered at the top (always shown), information in the top left corner (Tab hides it)
 SHOW_OPERATOR_OVERLAY = True  # False: no keys and no information
 OVERLAY_EDGE_PX = 10  # distance of the overlay from the screen edges
-HINT_FONT_SIZE_PX = 26
+HINT_FONT_SIZE_PX = 30
 OVERLAY_FONT_SIZE_PX = 18
 OVERLAY_COLOR = (120, 120, 120)
 OVERLAY_HINT_COLOR = (200, 200, 200)  # keys for the operator, centered at the top

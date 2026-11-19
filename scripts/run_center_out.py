@@ -10,9 +10,10 @@ from cop import calibration, config, cursor, geometry, saving, screen, start_win
 
 
 def run_calibration(window: pygame.Surface, text_font: pygame.font.Font, hint_font: pygame.font.Font,
-                    overlay_font: pygame.font.Font, cursor_source: cursor.MouseCursor, calibration_gain: float,
-                    language: str, show_info: bool) -> tuple[dict, bool]:
-    # Returns the new calibration and whether the operator information is shown (Tab), to keep it in the task
+                    overlay_font: pygame.font.Font, cursor_source: cursor.MouseCursor, gain: float,
+                    language: str, show_info: bool, center_only: bool = False) -> tuple[dict, bool]:
+    # Returns the new calibration (only {"center": ...} if center_only, after a pause) and whether the operator
+    # information is shown (Tab), to keep it in the task
 
     def run_phase(text_key: str, origin_cm: tuple[float, float], duration_s: float = 0.0, direction_deg=None,
                   wait_for_space: bool = False, wait_for_center: bool = False, operator_line: str = "") -> list:
@@ -39,8 +40,8 @@ def run_calibration(window: pygame.Surface, text_font: pygame.font.Font, hint_fo
             window.fill(config.BACKGROUND_COLOR)
             if direction_deg is not None:
                 screen.draw_arrow(window, direction_deg)
-            screen.draw_circle(window, config.CENTER_COLOR, 0.0, 0.0, config.CENTER_RADIUS_CM, in_center, calibration_gain)
-            screen.draw_cursor(window, x_cm - origin_cm[0], y_cm - origin_cm[1], calibration_gain)
+            screen.draw_circle(window, config.CENTER_COLOR, 0.0, 0.0, config.CENTER_RADIUS_CM, in_center, gain)
+            screen.draw_cursor(window, x_cm - origin_cm[0], y_cm - origin_cm[1], gain)
             screen.draw_text(window, text_font, screen.TEXTS[language][text_key])
             if config.SHOW_OPERATOR_OVERLAY:
                 if wait_for_space:
@@ -70,6 +71,8 @@ def run_calibration(window: pygame.Surface, text_font: pygame.font.Font, hint_fo
 
     run_phase("get_ready", (0.0, 0.0), config.CALIBRATION_READY_S)
     center = calibration.center_from_samples(run_phase("stand_still", (0.0, 0.0), config.CENTER_CALIBRATION_S))
+    if center_only:
+        return {"center": center}, show_info
     origin_cm = (center["x_cm"], center["y_cm"])
     hold_samples_by_direction = {}
     for direction_deg in config.TARGET_DIRECTIONS_DEG:
@@ -85,12 +88,13 @@ def run_calibration(window: pygame.Surface, text_font: pygame.font.Font, hint_fo
 
 def run_demonstration(window: pygame.Surface, text_font: pygame.font.Font, hint_font: pygame.font.Font,
                       overlay_font: pygame.font.Font, cursor_source: cursor.MouseCursor, origin_cm: tuple[float, float],
-                      target_positions: list, gain: float, language: str, show_info: bool) -> bool:
-    # The patient watches the ghost: for each speed, one movement per DEMONSTRATION_DIRECTIONS_DEG, shown like a
+                      target_positions: list, gain: float, language: str, directions_deg: tuple,
+                      show_info: bool) -> bool:
+    # The patient watches the ghost: for each speed, one movement per direction in directions_deg, shown like a
     # trial (target and speed word, green center at the go, ghost to the target, still there for TARGET_HOLD_S).
     # Space skips the rest. Returns whether the operator information is shown (Tab), to keep it in the task
     demonstrations = [
-        (speed, direction_deg) for speed in ("fast", "slow") for direction_deg in config.DEMONSTRATION_DIRECTIONS_DEG
+        (speed, direction_deg) for speed in ("fast", "slow") for direction_deg in directions_deg
     ]
     for speed, direction_deg in demonstrations:
         target_cm = target_positions[config.TARGET_DIRECTIONS_DEG.index(direction_deg)]
@@ -145,14 +149,6 @@ def target_positions_cm(target_distances_cm: list) -> list:
     ]
 
 
-def short_trial_list() -> list[tuple]:
-    # (direction_deg, speed, nogo): every direction at both speeds, then one no-go trial per speed
-    trials = [
-        (direction_deg, speed, False) for speed in ("fast", "slow") for direction_deg in config.TARGET_DIRECTIONS_DEG
-    ]
-    return trials + [(config.TARGET_DIRECTIONS_DEG[0], "fast", True), (config.TARGET_DIRECTIONS_DEG[-1], "slow", True)]
-
-
 def draw_trial(window: pygame.Surface, text_font: pygame.font.Font, current_trial: trial.Trial, cursor_x_cm: float,
                cursor_y_cm: float, gain: float, language: str, ghost_cm: tuple[float, float] | None = None):
     phase = current_trial.phase
@@ -199,6 +195,9 @@ def main():
     if settings is None:
         return
     language = settings["language"]
+    # The seed fixes order and waits of the trials: the same seed gives the same list
+    seed = config.TRIAL_LIST_SEED if config.TRIAL_LIST_SEED is not None else random.randrange(2 ** 31)
+    blocks = trial.make_trial_list(seed)
     window = screen.open_window()
     screen_width, screen_height = window.get_size()
     monitor_hz = screen.monitor_refresh_hz()
@@ -214,6 +213,7 @@ def main():
         "cursor_source": arguments.source,
         "screen_size_px": [screen_width, screen_height],
         "monitor_refresh_hz": monitor_hz,
+        "seed": seed,
     }
     calibrations = []
     session_folder = None
@@ -233,9 +233,13 @@ def main():
     target_distances_cm = [config.DEFAULT_TARGET_DISTANCE_CM] * len(config.TARGET_DIRECTIONS_DEG)
     target_positions = target_positions_cm(target_distances_cm)
     display_gain = calibration_gain
-    pending_trials = []  # (direction_deg, speed, nogo, attempt) still to run
+    block_number = 0  # blocks started so far
+    pending_trials = []  # (planned trial, attempt) still to run in the current block
     current_trial = None
+    current_planned = None  # planned trial of current_trial: number, block, direction, speed, no-go, wait
     last_trial = None
+    pause_requested = False  # key P: pause after the current trial
+    paused = False
     recent_flip_times = []
     show_info = True  # operator information below the keys; Tab hides and shows it
     practice_stage = None  # during the practice (key T): "with_ghost", then "without_ghost"
@@ -243,7 +247,7 @@ def main():
     practice_count = 0  # practice trials started: they follow a fixed order
     running = True
     while running:
-        # A trial that ended in the previous frame goes back in the list if needed, then the next one starts
+        # A trial that ended in the previous frame goes back in the block if needed, then the next one starts
         if current_trial is not None and current_trial.phase == "done":
             if practice_stage is not None:
                 # Practice: nothing is repeated, aborted trials do not count
@@ -252,51 +256,89 @@ def main():
                 if sum(practice_correct[-config.PRACTICE_WINDOW:]) >= config.PRACTICE_CORRECT_NEEDED:
                     practice_stage = "without_ghost" if practice_stage == "with_ghost" else None
                     practice_correct = []
-            elif current_trial.needs_repeat and current_trial.attempt <= config.MAX_REPEATS_PER_TRIAL:
-                pending_trials.append(
-                    (current_trial.direction_deg, current_trial.speed, current_trial.nogo, current_trial.attempt + 1)
-                )
+            else:
+                if current_trial.needs_repeat and current_trial.attempt <= config.MAX_REPEATS_PER_TRIAL:
+                    # Run again at the end of the same block, with the same number and wait
+                    pending_trials.append((current_planned, current_trial.attempt + 1))
+                if pause_requested:
+                    paused = True
+                    pause_requested = False
             last_trial = current_trial
             current_trial = None
+        next_trial = None
         if current_trial is None and practice_stage is not None:
             # Fixed order: speeds alternate, directions go in turn (with 5 directions, all 10 pairs every 10 trials)
-            direction_deg = config.TARGET_DIRECTIONS_DEG[practice_count % len(config.TARGET_DIRECTIONS_DEG)]
-            pending_trials = [(direction_deg, ("fast", "slow")[practice_count % 2], False, 1)]
-            practice_count += 1            
-        if current_trial is None and pending_trials:
-            direction_deg, speed, nogo, attempt = pending_trials.pop(0)
-            target_cm = target_positions[config.TARGET_DIRECTIONS_DEG.index(direction_deg)]
-            wait_s = random.uniform(*config.TARGET_WAIT_RANGE_S)
-            current_trial = trial.Trial(direction_deg, target_cm, speed, nogo, wait_s, attempt)
+            next_trial = ({
+                "trial": practice_count + 1,
+                "block": 0,  # 0 = practice
+                "direction_deg": config.TARGET_DIRECTIONS_DEG[practice_count % len(config.TARGET_DIRECTIONS_DEG)],
+                "speed": ("fast", "slow")[practice_count % 2],
+                "nogo": False,
+                "wait_s": random.uniform(*config.TARGET_WAIT_RANGE_S),
+            }, 1)
+            practice_count += 1
+        elif current_trial is None and pending_trials and not paused:
+            next_trial = pending_trials.pop(0)
+        if next_trial is not None:
+            current_planned, attempt = next_trial
+            target_cm = target_positions[config.TARGET_DIRECTIONS_DEG.index(current_planned["direction_deg"])]
+            current_trial = trial.Trial(current_planned["direction_deg"], target_cm, current_planned["speed"],
+                                        current_planned["nogo"], current_planned["wait_s"], attempt)
 
+        # Calibration, training and blocks start only while no trial runs: targets and scale never change in a trial
+        no_trial = current_trial is None and practice_stage is None
+        between_blocks = no_trial and not pending_trials
         calibrate = False
         train = False
+        start_block = False
+        resume = False
         for event in pygame.event.get():
-            if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
+            key = event.key if event.type == pygame.KEYDOWN else None
+            if event.type == pygame.QUIT or key == pygame.K_ESCAPE:
                 running = False
-            # C, T and Space start something only between runs: targets and scale never change during the trials
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_c and current_trial is None:
+            if key == pygame.K_c and no_trial:
                 calibrate = True
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_t and current_trial is None:
+            if key == pygame.K_t and between_blocks:
                 train = True
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE and practice_stage is not None:
+            if key == pygame.K_SPACE and practice_stage is not None:
                 # The operator ends this practice stage
                 practice_stage = "without_ghost" if practice_stage == "with_ghost" else None
                 practice_correct = []
                 current_trial = None
-            elif event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE and current_trial is None:
-                pending_trials = [(direction_deg, speed, nogo, 1) for direction_deg, speed, nogo in short_trial_list()]
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_r and isinstance(cursor_source, cursor.MouseCursor):
+            elif key == pygame.K_SPACE and paused:
+                resume = True
+            elif key == pygame.K_SPACE and between_blocks and block_number < len(blocks):
+                start_block = True
+            if key == pygame.K_p and practice_stage is None and (current_trial is not None or pending_trials):
+                pause_requested = True
+            if key == pygame.K_r and isinstance(cursor_source, cursor.MouseCursor):
                 cursor_source.recenter(*origin_cm)
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_TAB:
+            if key == pygame.K_TAB:
                 show_info = not show_info
 
         if train:
             show_info = run_demonstration(window, text_font, hint_font, overlay_font, cursor_source, origin_cm,
-                                          target_positions, display_gain, language, show_info)
+                                          target_positions, display_gain, language, config.DEMONSTRATION_DIRECTIONS_DEG,
+                                          show_info)
             practice_stage = "with_ghost"
             practice_correct = []
             practice_count = 0
+            recent_flip_times = []
+
+        if start_block or resume:
+            # After every pause the patient may stand differently: the center is measured again, limits are kept.
+            # Task scale: the patient only stands still, no lean to show
+            recalibration, show_info = run_calibration(window, text_font, hint_font, overlay_font, cursor_source,
+                                                       display_gain, language, show_info, center_only=True)
+            origin_cm = (recalibration["center"]["x_cm"], recalibration["center"]["y_cm"])
+            if start_block:
+                # Reminder of the two speeds, one ghost each, then the trials of the block
+                show_info = run_demonstration(window, text_font, hint_font, overlay_font, cursor_source, origin_cm,
+                                              target_positions, display_gain, language,
+                                              config.REFRESHER_DIRECTIONS_DEG, show_info)
+                pending_trials = [(planned, 1) for planned in blocks[block_number]]
+                block_number += 1
+            paused = False
             recent_flip_times = []
 
         if calibrate:
@@ -327,16 +369,17 @@ def main():
 
         window.fill(config.BACKGROUND_COLOR)
         if current_trial is None:
-            # Between runs: all targets, to check the layout
+            # Before, between or after the blocks, or paused: all targets, to check the layout
             in_center = geometry.inside_circle(cursor_x_cm, cursor_y_cm, 0.0, 0.0, config.CENTER_RADIUS_CM)
             screen.draw_circle(window, config.CENTER_COLOR, 0.0, 0.0, config.CENTER_RADIUS_CM, in_center, display_gain)
             for target_x_cm, target_y_cm in target_positions:
-                in_target = geometry.inside_circle(cursor_x_cm, cursor_y_cm, target_x_cm, target_y_cm, config.TARGET_RADIUS_CM)
-                screen.draw_circle(
-                    window, config.TARGET_COLOR, target_x_cm, target_y_cm, config.TARGET_RADIUS_CM, in_target, display_gain
-                )
+                in_target = geometry.inside_circle(cursor_x_cm, cursor_y_cm, target_x_cm, target_y_cm,
+                                                   config.TARGET_RADIUS_CM)
+                screen.draw_circle(window, config.TARGET_COLOR, target_x_cm, target_y_cm, config.TARGET_RADIUS_CM,
+                                   in_target, display_gain)
             screen.draw_cursor(window, cursor_x_cm, cursor_y_cm, display_gain)
-            screen.draw_text(window, text_font, screen.TEXTS[language]["quit_hint"])
+            session_finished = block_number == len(blocks) and not pending_trials
+            screen.draw_text(window, text_font, screen.TEXTS[language]["finished" if session_finished else "rest"])
         else:
             # First practice stage: the ghost starts at the go and moves at the required speed
             ghost_cm = None
@@ -367,22 +410,33 @@ def main():
                 f"{direction_deg}: {distance_cm:.1f}"
                 for direction_deg, distance_cm in zip(config.TARGET_DIRECTIONS_DEG, target_distances_cm)
             )
+            # Keys for the operator: what can be done now
+            keys_text = "R: mouse to the center  |  Tab: info  |  Esc: quit"
+            if practice_stage is not None:
+                correct_count = sum(practice_correct[-config.PRACTICE_WINDOW:])
+                operator_hint = (f"Practice {practice_stage.replace('_', ' ')}: {correct_count} of the last "
+                                 f"{config.PRACTICE_WINDOW} correct  |  Space: next stage  |  {keys_text}")
+            elif current_trial is not None:
+                pause_text = "pausing after this trial" if pause_requested else "P: pause after this trial"
+                operator_hint = f"Block {block_number} of {len(blocks)}  |  {pause_text}  |  {keys_text}"
+            elif paused:
+                operator_hint = f"Paused  |  Space: resume block {block_number}  |  C: calibrate  |  {keys_text}"
+            elif block_number < len(blocks):
+                operator_hint = (f"Space: start block {block_number + 1} of {len(blocks)}  |  T: training  |  "
+                                 f"C: calibrate  |  {keys_text}")
+            else:
+                operator_hint = f"Session finished  |  T: training  |  C: calibrate  |  {keys_text}"
             if current_trial is None:
-                operator_hint = ("Space: start trials  |  T: training  |  C: calibrate  |  R: mouse to the center  |  "
-                                 "Tab: info  |  Esc: quit")
                 trial_line = "no trial running"
             else:
-                if practice_stage is None:
-                    operator_hint = "Trials running  |  R: mouse to the center  |  Tab: info  |  Esc: quit"
-                else:
-                    correct_count = sum(practice_correct[-config.PRACTICE_WINDOW:])
-                    operator_hint = (f"Practice {practice_stage.replace('_', ' ')}: {correct_count} of the last "
-                                     f"{config.PRACTICE_WINDOW} correct  |  Space: next stage  |  "
-                                     f"R: mouse to the center  |  Tab: info  |  Esc: quit")                
                 nogo_text = " no-go" if current_trial.nogo else ""
-                trial_line = (f"trial {current_trial.direction_deg} deg {current_trial.speed}{nogo_text}, "
-                              f"attempt {current_trial.attempt}, phase {current_trial.phase}, "
-                              f"{len(pending_trials)} more in the list")
+                place_text = "practice" if practice_stage is not None else f"block {current_planned['block']}"
+                trial_line = (f"trial {current_planned['trial']} ({place_text}): {current_trial.direction_deg} deg "
+                              f"{current_trial.speed}{nogo_text}, attempt {current_trial.attempt}, "
+                              f"phase {current_trial.phase}")
+            block_sizes_text = "+".join(str(len(block)) for block in blocks)
+            block_line = (f"trial list seed {seed}: blocks of {block_sizes_text} trials, {block_number} started, "
+                          f"{len(pending_trials)} trials left in the current one")
             if last_trial is None:
                 last_trial_line = "last trial: none"
             else:
@@ -397,6 +451,7 @@ def main():
                 f"display gain {display_gain:.1f} px/cm",
                 calibration_line,
                 f"target distances {distances_text} cm",
+                block_line,
                 trial_line,
                 last_trial_line,
                 f"cursor x {cursor_x_cm:+.2f} cm, y {cursor_y_cm:+.2f} cm",

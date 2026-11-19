@@ -13,7 +13,8 @@ from cop import config, geometry
 TEXTS = {
     "en": {
         "language_name": "English",
-        "quit_hint": "Press Esc to quit",
+        "rest": "Rest",
+        "finished": "Finished, thank you!",
         "get_ready": "Get ready",
         "stand_still": "Stand still",
         "lean": "Lean toward the arrow as far as you can (press Space when steady)",
@@ -31,7 +32,8 @@ TEXTS = {
     },
     "zh": {
         "language_name": "中文",
-        "quit_hint": "按 Esc 键退出",
+        "rest": "休息一下",
+        "finished": "结束了，谢谢！",
         "get_ready": "准备",
         "stand_still": "站稳不动",
         "lean": "尽量向箭头方向倾斜（稳定后按空格键）",
