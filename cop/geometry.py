@@ -10,14 +10,23 @@ def center_px(screen_size: tuple[int, int]) -> tuple[float, float]:
     return screen_size[0] / 2, screen_size[1] * config.CENTER_SCREEN_Y_FRACTION
 
 
-def fit_display_gain(points_cm: list, screen_size: tuple[int, int]) -> float:
-    # Largest gain that keeps every point, plus a target radius, inside the screen
+def scaled_px(size_px: float, screen_size: tuple[int, int]) -> int:
+    # Sizes in config are for a screen REFERENCE_SCREEN_HEIGHT_PX high: same look at every resolution
+    return max(1, round(size_px * screen_size[1] / config.REFERENCE_SCREEN_HEIGHT_PX))
+
+
+def fit_display_gain(points_cm: list, screen_size: tuple[int, int], area_top_px: float,
+                     area_bottom_px: float) -> float:
+    # Largest gain that keeps the center circle and every point, plus a target radius, inside the screen sides
+    # and between area_top_px (below the operator keys) and area_bottom_px (above the patient texts)
     center_x_px, center_y_px = center_px(screen_size)
-    gain = math.inf
+    margin_px = scaled_px(config.SCREEN_MARGIN_PX, screen_size)
+    # The center circle and the targets at 0 and 180 deg reach below the center by their radius
+    gain = (area_bottom_px - center_y_px) / max(config.CENTER_RADIUS_CM, config.TARGET_RADIUS_CM)
     for x_cm, y_cm in points_cm:
         # Points are on the sides or above the center: check the space left or right, and the space above
-        gain = min(gain, (center_x_px - config.SCREEN_MARGIN_PX) / (abs(x_cm) + config.TARGET_RADIUS_CM))
-        gain = min(gain, (center_y_px - config.SCREEN_MARGIN_PX) / (y_cm + config.TARGET_RADIUS_CM))
+        gain = min(gain, (center_x_px - margin_px) / (abs(x_cm) + config.TARGET_RADIUS_CM))
+        gain = min(gain, (center_y_px - area_top_px - margin_px) / (y_cm + config.TARGET_RADIUS_CM))
     return gain
 
 

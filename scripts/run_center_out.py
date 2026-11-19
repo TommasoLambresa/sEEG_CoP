@@ -1,20 +1,23 @@
-"""Center-out task driven by the center of pressure; it will publish the task markers (for now: calibration, center, targets and cursor)."""
+"""Center-out task driven by the center of pressure; it will publish the task markers."""
 
 import argparse
+import random
 import sys
 
 import pygame
 
-from cop import calibration, config, cursor, geometry, saving, screen, start_window
+from cop import calibration, config, cursor, geometry, saving, screen, start_window, trial
 
 
-def run_calibration(window: pygame.Surface, text_font: pygame.font.Font, overlay_font: pygame.font.Font,
-                    cursor_source: cursor.MouseCursor, calibration_gain: float, language: str) -> dict:
-    screen_width, screen_height = window.get_size()
+def run_calibration(window: pygame.Surface, text_font: pygame.font.Font, hint_font: pygame.font.Font,
+                    overlay_font: pygame.font.Font, cursor_source: cursor.MouseCursor, calibration_gain: float,
+                    language: str, show_info: bool) -> tuple[dict, bool]:
+    # Returns the new calibration and whether the operator information is shown (Tab), to keep it in the task
 
     def run_phase(text_key: str, origin_cm: tuple[float, float], duration_s: float = 0.0, direction_deg=None,
                   wait_for_space: bool = False, wait_for_center: bool = False, operator_line: str = "") -> list:
         # One calibration screen; returns the cursor samples (x_cm, y_cm) read while it was shown
+        nonlocal show_info
         samples = []
         start_time = None
         inside_since = None
@@ -26,6 +29,8 @@ def run_calibration(window: pygame.Surface, text_font: pygame.font.Font, overlay
                     sys.exit()
                 if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
                     space_pressed = True
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_TAB:
+                    show_info = not show_info
                 if event.type == pygame.KEYDOWN and event.key == pygame.K_r and isinstance(cursor_source, cursor.MouseCursor):
                     cursor_source.recenter(*origin_cm)
             x_cm, y_cm, sample_time = cursor_source.read()
@@ -36,15 +41,17 @@ def run_calibration(window: pygame.Surface, text_font: pygame.font.Font, overlay
                 screen.draw_arrow(window, direction_deg)
             screen.draw_circle(window, config.CENTER_COLOR, 0.0, 0.0, config.CENTER_RADIUS_CM, in_center, calibration_gain)
             screen.draw_cursor(window, x_cm - origin_cm[0], y_cm - origin_cm[1], calibration_gain)
-            screen.draw_text(window, text_font, screen.TEXTS[language][text_key], (screen_width // 2, screen_height - 80))
+            screen.draw_text(window, text_font, screen.TEXTS[language][text_key])
             if config.SHOW_OPERATOR_OVERLAY:
                 if wait_for_space:
-                    hint = "Space: patient steady at the limit"
+                    operator_hint = "Space: the patient is steady at the limit"
                 elif wait_for_center:
-                    hint = "waiting for the return to the center"
+                    operator_hint = "Wait: the patient comes back to the center"
                 else:
-                    hint = f"{duration_s:.0f} s"
-                screen.draw_overlay(window, overlay_font, [f"calibration: {text_key}, {hint}", operator_line], [])
+                    operator_hint = f"Wait {duration_s:.0f} s"
+                screen.draw_overlay(window, hint_font, overlay_font, [f"calibration: {text_key}", operator_line], [],
+                                    f"{operator_hint}  |  R: mouse to the center  |  Tab: info  |  Esc: quit",
+                                    show_info)
             flip_time = screen.flip()
 
             if start_time is None:
@@ -73,7 +80,7 @@ def run_calibration(window: pygame.Surface, text_font: pygame.font.Font, overlay
             hold_samples = run_phase("hold", origin_cm, config.LIMIT_HOLD_S, direction_deg, operator_line=operator_line)
             hold_samples_by_direction[direction_deg].append(hold_samples)
             run_phase("back_to_center", origin_cm, wait_for_center=True, operator_line=operator_line)
-    return calibration.make_calibration(center, hold_samples_by_direction)
+    return calibration.make_calibration(center, hold_samples_by_direction), show_info
 
 
 def target_positions_cm(target_distances_cm: list) -> list:
@@ -82,6 +89,48 @@ def target_positions_cm(target_distances_cm: list) -> list:
         geometry.target_position(direction_deg, distance_cm)
         for direction_deg, distance_cm in zip(config.TARGET_DIRECTIONS_DEG, target_distances_cm)
     ]
+
+
+def short_trial_list() -> list[tuple]:
+    # (direction_deg, speed, nogo): every direction at both speeds, then one no-go trial per speed
+    trials = [
+        (direction_deg, speed, False) for speed in ("fast", "slow") for direction_deg in config.TARGET_DIRECTIONS_DEG
+    ]
+    return trials + [(config.TARGET_DIRECTIONS_DEG[0], "fast", True), (config.TARGET_DIRECTIONS_DEG[-1], "slow", True)]
+
+
+def draw_trial(window: pygame.Surface, text_font: pygame.font.Font, current_trial: trial.Trial, cursor_x_cm: float,
+               cursor_y_cm: float, gain: float, language: str):
+    phase = current_trial.phase
+    # Center as a traffic light: gray while waiting, green at the go, vermilion at the no-go signal
+    if phase in ("movement", "target_hold"):
+        center_color = config.GO_COLOR
+    elif phase == "nogo_hold":
+        center_color = config.NOGO_COLOR
+    else:
+        center_color = config.CENTER_COLOR
+    in_center = geometry.inside_circle(cursor_x_cm, cursor_y_cm, 0.0, 0.0, config.CENTER_RADIUS_CM)
+    screen.draw_circle(window, center_color, 0.0, 0.0, config.CENTER_RADIUS_CM, in_center, gain)
+    # Target filled with its speed color from its appearance, speed word in the same color below the center:
+    # neither changes at the go
+    if phase in ("target_wait", "movement", "nogo_hold", "target_hold"):
+        speed_color = config.SPEED_TARGET_COLORS[current_trial.speed]
+        target_x_cm, target_y_cm = current_trial.target_cm
+        screen.draw_circle(window, speed_color, target_x_cm, target_y_cm, config.TARGET_RADIUS_CM, True, gain)
+        screen.draw_text(window, text_font, screen.TEXTS[language][current_trial.speed], speed_color)
+    screen.draw_cursor(window, cursor_x_cm, cursor_y_cm, gain)
+    if phase == "feedback":
+        # Aborted trials show the reason, the others the outcome
+        text_key = current_trial.reason if current_trial.outcome == "aborted" else current_trial.outcome
+        screen.draw_text(window, text_font, screen.TEXTS[language][text_key])
+        # After a movement: where its duration fell compared with the correct range
+        if not current_trial.nogo and current_trial.outcome in ("ok", "too_fast", "too_slow"):
+            if current_trial.movement_time_s is None:
+                movement_time_s = config.MOVEMENT_TIMEOUT_S  # target never reached: mark at the end of the bar
+            else:
+                movement_time_s = current_trial.movement_time_s
+            screen.draw_time_bar(window, movement_time_s, config.MOVEMENT_TIME_RANGES_S[current_trial.speed],
+                                 config.SPEED_TARGET_COLORS[current_trial.speed])
 
 
 def main():
@@ -96,8 +145,11 @@ def main():
     window = screen.open_window()
     screen_width, screen_height = window.get_size()
     monitor_hz = screen.monitor_refresh_hz()
-    text_font = screen.load_font(config.TEXT_FONT_SIZE_PX)
-    overlay_font = screen.load_font(config.OVERLAY_FONT_SIZE_PX)
+    text_font = screen.load_font(window, config.TEXT_FONT_SIZE_PX)
+    hint_font = screen.load_font(window, config.HINT_FONT_SIZE_PX)
+    overlay_font = screen.load_font(window, config.OVERLAY_FONT_SIZE_PX)
+    # Center and targets are fitted between the operator keys and the patient texts
+    area_top_px, area_bottom_px = screen.target_area_px(window, text_font, hint_font)
     session = {
         "patient_id": settings["patient_id"],
         "session": settings["session"],
@@ -115,7 +167,8 @@ def main():
     # largest lean; the mouse covers the same range
     calibration_view_cm = [(-config.CALIBRATION_VIEW_CM, 0.0), (config.CALIBRATION_VIEW_CM, 0.0),
                            (0.0, config.CALIBRATION_VIEW_CM)]
-    calibration_gain = geometry.fit_display_gain(calibration_view_cm, (screen_width, screen_height))
+    calibration_gain = geometry.fit_display_gain(calibration_view_cm, (screen_width, screen_height), area_top_px,
+                                                 area_bottom_px)
     cursor_source = cursor.make_cursor(arguments.source, (screen_width, screen_height), calibration_gain)
 
     # Until the first calibration: center at (0, 0), the same default distance in every direction, calibration scale
@@ -123,20 +176,44 @@ def main():
     target_distances_cm = [config.DEFAULT_TARGET_DISTANCE_CM] * len(config.TARGET_DIRECTIONS_DEG)
     target_positions = target_positions_cm(target_distances_cm)
     display_gain = calibration_gain
+    pending_trials = []  # (direction_deg, speed, nogo, attempt) still to run
+    current_trial = None
+    last_trial = None
     recent_flip_times = []
+    show_info = True  # operator information below the keys; Tab hides and shows it
     running = True
     while running:
+        # A trial that ended in the previous frame goes back in the list if needed, then the next one starts
+        if current_trial is not None and current_trial.phase == "done":
+            if current_trial.needs_repeat and current_trial.attempt <= config.MAX_REPEATS_PER_TRIAL:
+                pending_trials.append(
+                    (current_trial.direction_deg, current_trial.speed, current_trial.nogo, current_trial.attempt + 1)
+                )
+            last_trial = current_trial
+            current_trial = None
+        if current_trial is None and pending_trials:
+            direction_deg, speed, nogo, attempt = pending_trials.pop(0)
+            target_cm = target_positions[config.TARGET_DIRECTIONS_DEG.index(direction_deg)]
+            wait_s = random.uniform(*config.TARGET_WAIT_RANGE_S)
+            current_trial = trial.Trial(direction_deg, target_cm, speed, nogo, wait_s, attempt)
+
         calibrate = False
         for event in pygame.event.get():
             if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
                 running = False
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_c:
+            # C and Space only between runs: targets and scale never change during the trials
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_c and current_trial is None:
                 calibrate = True
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE and current_trial is None:
+                pending_trials = [(direction_deg, speed, nogo, 1) for direction_deg, speed, nogo in short_trial_list()]
             if event.type == pygame.KEYDOWN and event.key == pygame.K_r and isinstance(cursor_source, cursor.MouseCursor):
                 cursor_source.recenter(*origin_cm)
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_TAB:
+                show_info = not show_info
 
         if calibrate:
-            new_calibration = run_calibration(window, text_font, overlay_font, cursor_source, calibration_gain, language)
+            new_calibration, show_info = run_calibration(window, text_font, hint_font, overlay_font, cursor_source,
+                                                         calibration_gain, language, show_info)
             origin_cm = (new_calibration["center"]["x_cm"], new_calibration["center"]["y_cm"])
             target_distances_cm = [
                 new_calibration["directions"][direction_deg]["target_distance_cm"]
@@ -144,7 +221,8 @@ def main():
             ]
             target_positions = target_positions_cm(target_distances_cm)
             # Scale that fits the new targets to the screen: changes only here, never during the trials
-            display_gain = geometry.fit_display_gain(target_positions, (screen_width, screen_height))
+            display_gain = geometry.fit_display_gain(target_positions, (screen_width, screen_height), area_top_px,
+                                                     area_bottom_px)
             new_calibration["display_gain_px_per_cm"] = display_gain
             calibrations.append(new_calibration)
             if session_folder is not None:
@@ -154,17 +232,25 @@ def main():
         raw_x_cm, raw_y_cm, sample_time = cursor_source.read()
         # The calibrated center is the origin of the task
         cursor_x_cm, cursor_y_cm = raw_x_cm - origin_cm[0], raw_y_cm - origin_cm[1]
+        if current_trial is not None:
+            for event_name in current_trial.update(cursor_x_cm, cursor_y_cm, sample_time):
+                # Printed in the terminal until the LSL markers exist
+                print(f"{sample_time:10.3f}  {event_name}")
 
         window.fill(config.BACKGROUND_COLOR)
-        in_center = geometry.inside_circle(cursor_x_cm, cursor_y_cm, 0.0, 0.0, config.CENTER_RADIUS_CM)
-        screen.draw_circle(window, config.CENTER_COLOR, 0.0, 0.0, config.CENTER_RADIUS_CM, in_center, display_gain)
-        for target_x_cm, target_y_cm in target_positions:
-            in_target = geometry.inside_circle(cursor_x_cm, cursor_y_cm, target_x_cm, target_y_cm, config.TARGET_RADIUS_CM)
-            screen.draw_circle(
-                window, config.TARGET_COLOR, target_x_cm, target_y_cm, config.TARGET_RADIUS_CM, in_target, display_gain
-            )
-        screen.draw_cursor(window, cursor_x_cm, cursor_y_cm, display_gain)
-        screen.draw_text(window, text_font, screen.TEXTS[language]["quit_hint"], (screen_width // 2, screen_height - 80))
+        if current_trial is None:
+            # Between runs: all targets, to check the layout
+            in_center = geometry.inside_circle(cursor_x_cm, cursor_y_cm, 0.0, 0.0, config.CENTER_RADIUS_CM)
+            screen.draw_circle(window, config.CENTER_COLOR, 0.0, 0.0, config.CENTER_RADIUS_CM, in_center, display_gain)
+            for target_x_cm, target_y_cm in target_positions:
+                in_target = geometry.inside_circle(cursor_x_cm, cursor_y_cm, target_x_cm, target_y_cm, config.TARGET_RADIUS_CM)
+                screen.draw_circle(
+                    window, config.TARGET_COLOR, target_x_cm, target_y_cm, config.TARGET_RADIUS_CM, in_target, display_gain
+                )
+            screen.draw_cursor(window, cursor_x_cm, cursor_y_cm, display_gain)
+            screen.draw_text(window, text_font, screen.TEXTS[language]["quit_hint"])
+        else:
+            draw_trial(window, text_font, current_trial, cursor_x_cm, cursor_y_cm, display_gain, language)
 
         if config.SHOW_OPERATOR_OVERLAY and len(recent_flip_times) > 1:
             refresh_hz = (len(recent_flip_times) - 1) / (recent_flip_times[-1] - recent_flip_times[0])
@@ -188,16 +274,34 @@ def main():
                 f"{direction_deg}: {distance_cm:.1f}"
                 for direction_deg, distance_cm in zip(config.TARGET_DIRECTIONS_DEG, target_distances_cm)
             )
-            screen.draw_overlay(window, overlay_font, [
+            if current_trial is None:
+                operator_hint = ("Space: start trials  |  C: calibrate  |  R: mouse to the center  |  Tab: info  |  "
+                                 "Esc: quit")
+                trial_line = "no trial running"
+            else:
+                operator_hint = "Trials running  |  R: mouse to the center  |  Tab: info  |  Esc: quit"
+                nogo_text = " no-go" if current_trial.nogo else ""
+                trial_line = (f"trial {current_trial.direction_deg} deg {current_trial.speed}{nogo_text}, "
+                              f"attempt {current_trial.attempt}, phase {current_trial.phase}, "
+                              f"{len(pending_trials)} more in the list")
+            if last_trial is None:
+                last_trial_line = "last trial: none"
+            else:
+                reaction_text = "-" if last_trial.reaction_time_s is None else f"{last_trial.reaction_time_s:.2f} s"
+                movement_text = "-" if last_trial.movement_time_s is None else f"{last_trial.movement_time_s:.2f} s"
+                last_trial_line = (f"last trial: {last_trial.outcome} {last_trial.reason or ''}, "
+                                   f"RT {reaction_text}, MT {movement_text}")
+            screen.draw_overlay(window, hint_font, overlay_font, [
                 f"saving to {session_folder}" if session_folder is not None else "data not saved",
                 f"language {language}, screen {screen_width} x {screen_height} px",
                 f"refresh {refresh_hz:.1f} Hz (monitor {monitor_hz} Hz)",
                 f"display gain {display_gain:.1f} px/cm",
                 calibration_line,
                 f"target distances {distances_text} cm",
+                trial_line,
+                last_trial_line,
                 f"cursor x {cursor_x_cm:+.2f} cm, y {cursor_y_cm:+.2f} cm",
-                "C: calibrate, R: mouse back to the center",
-            ], warning_lines)
+            ], warning_lines, operator_hint, show_info)
 
         recent_flip_times.append(screen.flip())
         recent_flip_times = recent_flip_times[-61:]
