@@ -107,6 +107,16 @@ def draw_cursor(window: pygame.Surface, x_cm: float, y_cm: float, gain_px_per_cm
     pygame.draw.circle(window, config.BACKGROUND_COLOR, (x_px, y_px), radius_px, edge_px)
 
 
+def draw_ghost(window: pygame.Surface, x_cm: float, y_cm: float, gain_px_per_cm: float):
+    # Semi-transparent cursor that shows the movement at the required speed
+    x_px, y_px = geometry.cm_to_pixels(x_cm, y_cm, window.get_size(), gain_px_per_cm)
+    radius_px = geometry.cm_length_to_pixels(config.CURSOR_RADIUS_CM, gain_px_per_cm)
+    # Drawn on its own transparent image, then copied on the window: only this way the window shows through
+    ghost_image = pygame.Surface((2 * radius_px, 2 * radius_px), pygame.SRCALPHA)
+    pygame.draw.circle(ghost_image, (*config.CURSOR_COLOR, config.GHOST_ALPHA), (radius_px, radius_px), radius_px)
+    window.blit(ghost_image, (x_px - radius_px, y_px - radius_px))
+
+
 def draw_arrow(window: pygame.Surface, direction_deg: float):
     center_x_px, center_y_px = geometry.center_px(window.get_size())
     # Unit vector of the direction on the screen (screen y grows downward)

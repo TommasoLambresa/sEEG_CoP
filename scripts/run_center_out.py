@@ -83,6 +83,60 @@ def run_calibration(window: pygame.Surface, text_font: pygame.font.Font, hint_fo
     return calibration.make_calibration(center, hold_samples_by_direction), show_info
 
 
+def run_demonstration(window: pygame.Surface, text_font: pygame.font.Font, hint_font: pygame.font.Font,
+                      overlay_font: pygame.font.Font, cursor_source: cursor.MouseCursor, origin_cm: tuple[float, float],
+                      target_positions: list, gain: float, language: str, show_info: bool) -> bool:
+    # The patient watches the ghost: for each speed, one movement per DEMONSTRATION_DIRECTIONS_DEG, shown like a
+    # trial (target and speed word, green center at the go, ghost to the target, still there for TARGET_HOLD_S).
+    # Space skips the rest. Returns whether the operator information is shown (Tab), to keep it in the task
+    demonstrations = [
+        (speed, direction_deg) for speed in ("fast", "slow") for direction_deg in config.DEMONSTRATION_DIRECTIONS_DEG
+    ]
+    for speed, direction_deg in demonstrations:
+        target_cm = target_positions[config.TARGET_DIRECTIONS_DEG.index(direction_deg)]
+        ghost_s = config.GHOST_DURATIONS_S[speed]
+        # A trial used only to draw the screen: its phase follows the clock, the patient's cursor does not count
+        shown_trial = trial.Trial(direction_deg, target_cm, speed, False, config.DEMONSTRATION_WAIT_S)
+        start_time = None
+        elapsed_s = 0.0
+        while elapsed_s < config.DEMONSTRATION_WAIT_S + ghost_s + config.TARGET_HOLD_S + config.INTER_TRIAL_S:
+            for event in pygame.event.get():
+                key = event.key if event.type == pygame.KEYDOWN else None
+                if event.type == pygame.QUIT or key == pygame.K_ESCAPE:
+                    pygame.quit()
+                    sys.exit()
+                if key == pygame.K_SPACE:
+                    return show_info
+                if key == pygame.K_r and isinstance(cursor_source, cursor.MouseCursor):
+                    cursor_source.recenter(*origin_cm)
+                if key == pygame.K_TAB:
+                    show_info = not show_info
+            raw_x_cm, raw_y_cm, sample_time = cursor_source.read()
+            if start_time is None:
+                start_time = sample_time
+            elapsed_s = sample_time - start_time
+            since_go_s = elapsed_s - config.DEMONSTRATION_WAIT_S
+            ghost_cm = None
+            if since_go_s < 0:
+                shown_trial.phase = "target_wait"
+            elif since_go_s < ghost_s + config.TARGET_HOLD_S:
+                shown_trial.phase = "movement"
+                ghost_cm = geometry.minimum_jerk_position(target_cm, since_go_s, ghost_s)
+            else:
+                shown_trial.phase = "inter_trial"
+
+            window.fill(config.BACKGROUND_COLOR)
+            draw_trial(window, text_font, shown_trial, raw_x_cm - origin_cm[0], raw_y_cm - origin_cm[1], gain,
+                       language, ghost_cm)
+            if config.SHOW_OPERATOR_OVERLAY:
+                screen.draw_overlay(window, hint_font, overlay_font,
+                                    [f"demonstration: {speed}, {direction_deg} deg, ghost {ghost_s:.1f} s"], [],
+                                    "Demonstration: the patient watches  |  Space: skip  |  R: mouse to the center  |  "
+                                    "Tab: info  |  Esc: quit", show_info)
+            screen.flip()
+    return show_info
+
+
 def target_positions_cm(target_distances_cm: list) -> list:
     # (x, y) of each target in cm from the center, in the order of TARGET_DIRECTIONS_DEG
     return [
@@ -100,7 +154,7 @@ def short_trial_list() -> list[tuple]:
 
 
 def draw_trial(window: pygame.Surface, text_font: pygame.font.Font, current_trial: trial.Trial, cursor_x_cm: float,
-               cursor_y_cm: float, gain: float, language: str):
+               cursor_y_cm: float, gain: float, language: str, ghost_cm: tuple[float, float] | None = None):
     phase = current_trial.phase
     # Center as a traffic light: gray while waiting, green at the go, vermilion at the no-go signal
     if phase in ("movement", "target_hold"):
@@ -118,6 +172,9 @@ def draw_trial(window: pygame.Surface, text_font: pygame.font.Font, current_tria
         target_x_cm, target_y_cm = current_trial.target_cm
         screen.draw_circle(window, speed_color, target_x_cm, target_y_cm, config.TARGET_RADIUS_CM, True, gain)
         screen.draw_text(window, text_font, screen.TEXTS[language][current_trial.speed], speed_color)
+    # Ghost below the patient's cursor: the cursor stays visible when the two overlap
+    if ghost_cm is not None:
+        screen.draw_ghost(window, *ghost_cm, gain)
     screen.draw_cursor(window, cursor_x_cm, cursor_y_cm, gain)
     if phase == "feedback":
         # Aborted trials show the reason, the others the outcome
@@ -181,16 +238,31 @@ def main():
     last_trial = None
     recent_flip_times = []
     show_info = True  # operator information below the keys; Tab hides and shows it
+    practice_stage = None  # during the practice (key T): "with_ghost", then "without_ghost"
+    practice_correct = []  # one per movement in the current practice stage: True if its duration was right
+    practice_count = 0  # practice trials started: they follow a fixed order
     running = True
     while running:
         # A trial that ended in the previous frame goes back in the list if needed, then the next one starts
         if current_trial is not None and current_trial.phase == "done":
-            if current_trial.needs_repeat and current_trial.attempt <= config.MAX_REPEATS_PER_TRIAL:
+            if practice_stage is not None:
+                # Practice: nothing is repeated, aborted trials do not count
+                if current_trial.outcome != "aborted":
+                    practice_correct.append(current_trial.outcome == "ok")
+                if sum(practice_correct[-config.PRACTICE_WINDOW:]) >= config.PRACTICE_CORRECT_NEEDED:
+                    practice_stage = "without_ghost" if practice_stage == "with_ghost" else None
+                    practice_correct = []
+            elif current_trial.needs_repeat and current_trial.attempt <= config.MAX_REPEATS_PER_TRIAL:
                 pending_trials.append(
                     (current_trial.direction_deg, current_trial.speed, current_trial.nogo, current_trial.attempt + 1)
                 )
             last_trial = current_trial
             current_trial = None
+        if current_trial is None and practice_stage is not None:
+            # Fixed order: speeds alternate, directions go in turn (with 5 directions, all 10 pairs every 10 trials)
+            direction_deg = config.TARGET_DIRECTIONS_DEG[practice_count % len(config.TARGET_DIRECTIONS_DEG)]
+            pending_trials = [(direction_deg, ("fast", "slow")[practice_count % 2], False, 1)]
+            practice_count += 1            
         if current_trial is None and pending_trials:
             direction_deg, speed, nogo, attempt = pending_trials.pop(0)
             target_cm = target_positions[config.TARGET_DIRECTIONS_DEG.index(direction_deg)]
@@ -198,18 +270,34 @@ def main():
             current_trial = trial.Trial(direction_deg, target_cm, speed, nogo, wait_s, attempt)
 
         calibrate = False
+        train = False
         for event in pygame.event.get():
             if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
                 running = False
-            # C and Space only between runs: targets and scale never change during the trials
+            # C, T and Space start something only between runs: targets and scale never change during the trials
             if event.type == pygame.KEYDOWN and event.key == pygame.K_c and current_trial is None:
                 calibrate = True
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE and current_trial is None:
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_t and current_trial is None:
+                train = True
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE and practice_stage is not None:
+                # The operator ends this practice stage
+                practice_stage = "without_ghost" if practice_stage == "with_ghost" else None
+                practice_correct = []
+                current_trial = None
+            elif event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE and current_trial is None:
                 pending_trials = [(direction_deg, speed, nogo, 1) for direction_deg, speed, nogo in short_trial_list()]
             if event.type == pygame.KEYDOWN and event.key == pygame.K_r and isinstance(cursor_source, cursor.MouseCursor):
                 cursor_source.recenter(*origin_cm)
             if event.type == pygame.KEYDOWN and event.key == pygame.K_TAB:
                 show_info = not show_info
+
+        if train:
+            show_info = run_demonstration(window, text_font, hint_font, overlay_font, cursor_source, origin_cm,
+                                          target_positions, display_gain, language, show_info)
+            practice_stage = "with_ghost"
+            practice_correct = []
+            practice_count = 0
+            recent_flip_times = []
 
         if calibrate:
             new_calibration, show_info = run_calibration(window, text_font, hint_font, overlay_font, cursor_source,
@@ -250,7 +338,12 @@ def main():
             screen.draw_cursor(window, cursor_x_cm, cursor_y_cm, display_gain)
             screen.draw_text(window, text_font, screen.TEXTS[language]["quit_hint"])
         else:
-            draw_trial(window, text_font, current_trial, cursor_x_cm, cursor_y_cm, display_gain, language)
+            # First practice stage: the ghost starts at the go and moves at the required speed
+            ghost_cm = None
+            if practice_stage == "with_ghost" and current_trial.phase in ("movement", "target_hold"):
+                ghost_cm = geometry.minimum_jerk_position(current_trial.target_cm, sample_time - current_trial.go_s,
+                                                          config.GHOST_DURATIONS_S[current_trial.speed])
+            draw_trial(window, text_font, current_trial, cursor_x_cm, cursor_y_cm, display_gain, language, ghost_cm)
 
         if config.SHOW_OPERATOR_OVERLAY and len(recent_flip_times) > 1:
             refresh_hz = (len(recent_flip_times) - 1) / (recent_flip_times[-1] - recent_flip_times[0])
@@ -275,11 +368,17 @@ def main():
                 for direction_deg, distance_cm in zip(config.TARGET_DIRECTIONS_DEG, target_distances_cm)
             )
             if current_trial is None:
-                operator_hint = ("Space: start trials  |  C: calibrate  |  R: mouse to the center  |  Tab: info  |  "
-                                 "Esc: quit")
+                operator_hint = ("Space: start trials  |  T: training  |  C: calibrate  |  R: mouse to the center  |  "
+                                 "Tab: info  |  Esc: quit")
                 trial_line = "no trial running"
             else:
-                operator_hint = "Trials running  |  R: mouse to the center  |  Tab: info  |  Esc: quit"
+                if practice_stage is None:
+                    operator_hint = "Trials running  |  R: mouse to the center  |  Tab: info  |  Esc: quit"
+                else:
+                    correct_count = sum(practice_correct[-config.PRACTICE_WINDOW:])
+                    operator_hint = (f"Practice {practice_stage.replace('_', ' ')}: {correct_count} of the last "
+                                     f"{config.PRACTICE_WINDOW} correct  |  Space: next stage  |  "
+                                     f"R: mouse to the center  |  Tab: info  |  Esc: quit")                
                 nogo_text = " no-go" if current_trial.nogo else ""
                 trial_line = (f"trial {current_trial.direction_deg} deg {current_trial.speed}{nogo_text}, "
                               f"attempt {current_trial.attempt}, phase {current_trial.phase}, "

@@ -48,8 +48,8 @@ ARROW_COLOR = (80, 160, 255)
 CENTER_HOLD_S = 1.0  # inside the center before the target appears; leaving restarts the count
 CENTER_HOLD_TIMEOUT_S = 10.0  # hold not reached in this time: trial aborted ("unstable_hold")
 TARGET_WAIT_RANGE_S = (1, 2)  # target on -> go, random in this range; leaving the center: aborted ("early_start")
-START_TIMEOUT_S = 1.5  # go -> leaving the center; longer: aborted ("no_start")
-MOVEMENT_TIME_RANGES_S = {"fast": (0.0, 1.2), "slow": (2.5, 4.0)}  # correct movement time (shortest, longest)
+START_TIMEOUT_S = 3.0  # go -> leaving the center; longer: aborted ("no_start"). Long: slow starts are smooth
+MOVEMENT_TIME_RANGES_S = {"fast": (0.0, 1.2), "slow": (2.0, 3.0)}  # correct movement time (shortest, longest)
 MOVEMENT_TIMEOUT_S = 6.0  # target not reached in this time: "too_slow"
 TARGET_HOLD_S = 1.0  # inside the target after the arrival; leaving restarts the count
 TARGET_HOLD_TIMEOUT_S = 5.0  # hold not reached in this time: feedback anyway, the trial stays valid
@@ -65,6 +65,14 @@ TIME_BAR_WIDTH_FRACTION = 0.5  # feedback bar from 0 to MOVEMENT_TIMEOUT_S, frac
 TIME_BAR_HEIGHT_PX = 16
 TIME_BAR_Y_FRACTION = 0.965  # fraction of the screen height from the top, below the patient texts
 TIME_BAR_COLOR = (70, 70, 70)
+
+# Training (key T): the patient watches the ghost (semi-transparent cursor), then practices with and without it
+GHOST_DURATIONS_S = {"fast": 1.5, "slow": 5.0}
+GHOST_ALPHA = 110  # 0 = invisible, 255 = as opaque as the cursor
+DEMONSTRATION_DIRECTIONS_DEG = (90, 45, 135)  # one ghost movement per direction, for each speed
+DEMONSTRATION_WAIT_S = 1.5  # target on -> go in the demonstration
+PRACTICE_WINDOW = 5  # a practice stage ends when PRACTICE_CORRECT_NEEDED of the last PRACTICE_WINDOW movements
+PRACTICE_CORRECT_NEEDED = 4  # have the right duration, or when the operator presses Space
 
 # Texts
 FONT_FILE_NAME = "msyh.ttc"  # in the Windows fonts folder; must contain Chinese characters (e.g. Microsoft YaHei)

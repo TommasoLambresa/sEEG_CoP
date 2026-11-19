@@ -40,6 +40,15 @@ def min_target_distance_cm() -> float:
     return max(off_center_cm, apart_cm)
 
 
+def minimum_jerk_position(target_cm: tuple[float, float], elapsed_s: float,
+                          duration_s: float) -> tuple[float, float]:
+    # Point on the straight line from the center (0, 0) to target_cm, elapsed_s after the start of a movement that
+    # lasts duration_s: minimum jerk, so the speed rises and falls smoothly (bell shape), like a natural movement
+    time_fraction = min(max(elapsed_s / duration_s, 0.0), 1.0)
+    path_fraction = 10 * time_fraction ** 3 - 15 * time_fraction ** 4 + 6 * time_fraction ** 5
+    return target_cm[0] * path_fraction, target_cm[1] * path_fraction
+
+
 def cm_to_pixels(x_cm: float, y_cm: float, screen_size: tuple[int, int], gain_px_per_cm: float) -> tuple[int, int]:
     center_x_px, center_y_px = center_px(screen_size)
     x_px = center_x_px + x_cm * gain_px_per_cm
