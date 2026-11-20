@@ -12,6 +12,12 @@ def ask_start_settings() -> dict | None:
     # Returns None if the window is closed without starting
     # Same call as in screen.open_window: it must come before the first window, and this window comes first
     ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    # Tk does not resize its content when moved to a monitor with another scaling: this window alone is left
+    # to Windows (sharp on the main monitor, scaled on the others); the task window stays per-monitor aware
+    user32 = ctypes.windll.user32
+    user32.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+    user32.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+    previous_dpi_context = user32.SetThreadDpiAwarenessContext(-2)  # -2 = DPI_AWARENESS_CONTEXT_SYSTEM_AWARE
     root = tk.Tk()
     root.title("Center-out task")
     font.nametofont("TkDefaultFont").configure(size=config.START_WINDOW_FONT_SIZE)
@@ -88,4 +94,5 @@ def ask_start_settings() -> dict | None:
     root.bind("<Escape>", lambda event: root.destroy())
     root.eval("tk::PlaceWindow . center")
     root.mainloop()
+    user32.SetThreadDpiAwarenessContext(previous_dpi_context)
     return settings or None

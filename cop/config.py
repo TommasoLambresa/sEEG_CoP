@@ -8,6 +8,7 @@ SAVE_DIR = Path(__file__).resolve().parents[1] / "data"  # folder proposed in th
 NAME_CHARACTERS = string.ascii_letters + string.digits + "_-"  # allowed in patient ID and session: valid in folder names
 NAME_MAX_LENGTH = 20
 START_WINDOW_FONT_SIZE = 12  # points
+MARKER_STREAM_NAME = "CopTaskMarkers"  # LSL stream of the task markers (type "Markers", one text channel)
 
 # Cursor source: "mouse" or "force_plate"
 CURSOR_SOURCE = "mouse"
@@ -17,7 +18,7 @@ SCREEN_INDEX = 0  # 0 = main monitor, 1 = second monitor
 REFERENCE_SCREEN_HEIGHT_PX = 1080  # sizes in px in this file are for a screen this high; scaled to the real one
 SCREEN_MARGIN_PX = 20  # free space between the farthest target and the screen edge or the operator keys
 CENTER_SCREEN_Y_FRACTION = 0.8  # CoP (0, 0) drawn at this fraction of the screen height from the top (0.5 = middle)
-REFRESH_TOLERANCE_FRACTION = 0.05  # red warning if measured and monitor refresh rates differ more than this
+REFRESH_TOLERANCE_FRACTION = 0.15  # red warning if measured and monitor refresh rates differ more than this
 BACKGROUND_COLOR = (0, 0, 0)
 OUTLINE_WIDTH_PX = 3
 

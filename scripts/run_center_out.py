@@ -1,12 +1,16 @@
-"""Center-out task driven by the center of pressure; it will publish the task markers."""
+"""Center-out task driven by the center of pressure; publishes the task markers on LSL."""
 
 import argparse
 import random
 import sys
 
 import pygame
+from pylsl import local_clock
 
 from cop import calibration, config, cursor, geometry, saving, screen, start_window, trial
+
+# Trial events that change the screen: their time is the flip that shows them, for the others the cursor sample
+VISUAL_EVENTS = ("target_on", "go", "nogo_signal", "feedback")
 
 
 def run_calibration(window: pygame.Surface, text_font: pygame.font.Font, hint_font: pygame.font.Font,
@@ -220,6 +224,13 @@ def main():
     if settings["save_data"]:
         session_folder = saving.make_session_folder(settings["save_folder"], settings["patient_id"], settings["session"])
         calibration.save_calibrations(session_folder, session, calibrations)
+    # Markers on LSL always, the CSV files only when saving; the planned list first, before anything happens
+    saver = saving.Saver(session_folder)
+    session_start_s = local_clock()
+    saver.marker(session_start_s, "session_start")
+    for block in blocks:
+        for planned in block:
+            saver.row(session_start_s, "planned_trial", **planned)
     # Calibration screens, and the task before the first calibration, use a fixed scale wide enough for the
     # largest lean; the mouse covers the same range
     calibration_view_cm = [(-config.CALIBRATION_VIEW_CM, 0.0), (config.CALIBRATION_VIEW_CM, 0.0),
@@ -260,7 +271,12 @@ def main():
                 if current_trial.needs_repeat and current_trial.attempt <= config.MAX_REPEATS_PER_TRIAL:
                     # Run again at the end of the same block, with the same number and wait
                     pending_trials.append((current_planned, current_trial.attempt + 1))
-                if pause_requested:
+                if not pending_trials:
+                    # Last trial of the block: the patient rests until Space anyway, no pause needed
+                    saver.marker(local_clock(), "block_end", block=block_number)
+                    pause_requested = False
+                elif pause_requested:
+                    saver.marker(local_clock(), "pause_start", block=block_number)
                     paused = True
                     pause_requested = False
             last_trial = current_trial
@@ -326,6 +342,8 @@ def main():
             recent_flip_times = []
 
         if start_block or resume:
+            if resume:
+                saver.marker(local_clock(), "pause_end", block=block_number)
             # After every pause the patient may stand differently: the center is measured again, limits are kept.
             # Task scale: the patient only stands still, no lean to show
             recalibration, show_info = run_calibration(window, text_font, hint_font, overlay_font, cursor_source,
@@ -338,6 +356,7 @@ def main():
                                               config.REFRESHER_DIRECTIONS_DEG, show_info)
                 pending_trials = [(planned, 1) for planned in blocks[block_number]]
                 block_number += 1
+                saver.marker(local_clock(), "block_start", block=block_number)
             paused = False
             recent_flip_times = []
 
@@ -362,10 +381,9 @@ def main():
         raw_x_cm, raw_y_cm, sample_time = cursor_source.read()
         # The calibrated center is the origin of the task
         cursor_x_cm, cursor_y_cm = raw_x_cm - origin_cm[0], raw_y_cm - origin_cm[1]
+        trial_events = []
         if current_trial is not None:
-            for event_name in current_trial.update(cursor_x_cm, cursor_y_cm, sample_time):
-                # Printed in the terminal until the LSL markers exist
-                print(f"{sample_time:10.3f}  {event_name}")
+            trial_events = current_trial.update(cursor_x_cm, cursor_y_cm, sample_time)
 
         window.fill(config.BACKGROUND_COLOR)
         if current_trial is None:
@@ -393,6 +411,9 @@ def main():
             warning_lines = []
             if abs(refresh_hz - monitor_hz) > config.REFRESH_TOLERANCE_FRACTION * monitor_hz:
                 warning_lines.append("measured refresh rate differs from the monitor: check SCREEN_INDEX and vsync")
+            if session_folder is not None and not saver.outlet.have_consumers():
+                warning_lines.append(f"no program receives the LSL markers {config.MARKER_STREAM_NAME}: "
+                                     "start the recording (LabRecorder)")
             if calibrations:
                 center = calibrations[-1]["center"]
                 calibration_line = (f"calibration {len(calibrations)}: "
@@ -457,9 +478,27 @@ def main():
                 f"cursor x {cursor_x_cm:+.2f} cm, y {cursor_y_cm:+.2f} cm",
             ], warning_lines, operator_hint, show_info)
 
-        recent_flip_times.append(screen.flip())
+        flip_time = screen.flip()
+        recent_flip_times.append(flip_time)
         recent_flip_times = recent_flip_times[-61:]
 
+        # Saved after the flip, when the time of what the patient saw is known.
+        # x_cm, y_cm: cursor before subtracting the calibrated center
+        values = {"phase": "rest", "x_cm": raw_x_cm, "y_cm": raw_y_cm}
+        if current_trial is not None:
+            values.update(phase=current_trial.phase, block=current_planned["block"], trial=current_planned["trial"],
+                          attempt=current_trial.attempt, direction_deg=current_trial.direction_deg,
+                          speed=current_trial.speed, nogo=current_trial.nogo)
+        saver.cursor(sample_time, **values)
+        if trial_events:
+            values.update(reaction_time_s=current_trial.reaction_time_s,
+                          movement_time_s=current_trial.movement_time_s, outcome=current_trial.outcome,
+                          reason=current_trial.reason)
+        for event_name in trial_events:
+            saver.marker(flip_time if event_name in VISUAL_EVENTS else sample_time, event_name, **values)
+
+    saver.marker(local_clock(), "session_end")
+    saver.close()
     pygame.quit()
 
 
